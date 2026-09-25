@@ -1,7 +1,6 @@
 // ==========================================================
 // IGBINEDION UNIVERSITY CAMPUS PORTAL - APP.JS
-// UPDATED: Announcements, view counter, lightbox, message
-// reactions, PWA support, upgraded AI Assistant
+// UPDATED: Bulletproof deposit with logging + verification
 // ==========================================================
 
 /* ---------- GLOBAL STATE ---------- */
@@ -31,14 +30,9 @@ let currentRatingOrderId = null;
 let currentRatingValue = 0;
 let notifFilter = 'all';
 
-// Lightbox state
 let lightboxImages = [];
 let lightboxIndex = 0;
-
-// Reaction picker state
 let reactionPickerMsgId = null;
-
-// PWA state
 let deferredPrompt = null;
 
 let aiChatHistory = [{
@@ -112,30 +106,8 @@ function compressImage(file, maxWidth = 800, quality = 0.6) {
         const canvas = document.createElement('canvas');
         let width = img.width, height = img.height;
         if (width > maxWidth) { height = (height * maxWidth) / width; width = maxWidth; }
-        canvas.width = width; canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', quality));
-      };
-      img.onerror = reject;
-      img.src = e.target.result;
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-/* Higher quality for lightbox original */
-function compressImageHigh(file, maxWidth = 1400, quality = 0.75) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        let width = img.width, height = img.height;
-        if (width > maxWidth) { height = (height * maxWidth) / width; width = maxWidth; }
-        canvas.width = width; canvas.height = height;
+        canvas.width = width;
+        canvas.height = height;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, width, height);
         resolve(canvas.toDataURL('image/jpeg', quality));
@@ -203,7 +175,7 @@ function renderVerifiedBadge(username) {
 }
 
 /* ==========================================================
-   STARS / RATINGS
+   STARS
    ========================================================== */
 function renderStars(rating, size = 'text-[10px]') {
   const full = Math.round(rating || 0);
@@ -383,7 +355,7 @@ async function previewSignupAvatar(e) {
 }
 
 /* ==========================================================
-   RENDER PRODUCTS + PEOPLE
+   RENDER PRODUCTS
    ========================================================== */
 function renderProducts() {
   const buyGrid = document.getElementById('buyProductGrid');
@@ -404,7 +376,6 @@ function renderProducts() {
     (activeTagFilter === 'all' || p.tag === activeTagFilter)
   );
 
-  // Auto-expire boosts + sort
   const now = Date.now();
   activeProducts.sort((a, b) => {
     const aFeat = a.featured && (!a.featuredUntil || a.featuredUntil > now);
@@ -543,7 +514,7 @@ function renderMyListings() {
 }
 
 /* ==========================================================
-   PRODUCT DETAIL + LIGHTBOX
+   PRODUCT DETAIL
    ========================================================== */
 let detailImgIndex = 0;
 let detailImages = [];
@@ -561,7 +532,6 @@ function openProductDetail(productId) {
   document.getElementById('detailProdPrice').textContent = `₦ ${(p.price || 0).toLocaleString()}`;
   document.getElementById('detailProdDescription').textContent = p.description;
 
-  // View counter
   const viewsEl = document.getElementById('detailProdViews');
   if (viewsEl) viewsEl.textContent = `👁 ${(p.views || 0)} views`;
 
@@ -592,7 +562,6 @@ function openProductDetail(productId) {
       `closeModal('productDetailModal'); guardedAction(() => initiateEscrowPurchase('${p.id}'))`);
   }
 
-  // Increment view count (once per session per product)
   const viewKey = 'viewed_' + productId;
   if (!sessionStorage.getItem(viewKey)) {
     sessionStorage.setItem(viewKey, '1');
@@ -1334,50 +1303,145 @@ function renderMyReviews() {
 }
 
 /* ==========================================================
-   WALLET
+   WALLET DEPOSIT — Bulletproof
    ========================================================== */
-function handleWalletDeposit() {
-  if (!currentUser) return;
-  const inputVal = prompt("Enter deposit amount (₦):", "5000");
+async function handleWalletDeposit() {
+  if (!currentUser || !currentUser.username) {
+    showToast("Please log in first", true);
+    return;
+  }
+  console.log("[DEPOSIT] Starting for:", currentUser.username, "| Balance:", currentUser.balance);
+
+  const inputVal = prompt("Enter deposit amount (₦):", "100");
   if (!inputVal) return;
   const amountNaira = parseFloat(inputVal);
-  if (isNaN(amountNaira) || amountNaira <= 0) { showToast("Invalid amount", true); return; }
+
+  if (isNaN(amountNaira) || amountNaira <= 0) {
+    showToast("Invalid amount", true);
+    return;
+  }
+  if (amountNaira < 100) {
+    showToast("Minimum deposit is ₦100", true);
+    return;
+  }
+
+  if (typeof window.fsUpdateUser !== 'function') {
+    showToast("Firebase not loaded. Please refresh.", true);
+    console.error("[DEPOSIT] fsUpdateUser missing");
+    return;
+  }
+
+  const balanceBefore = currentUser.balance || 0;
+  console.log("[DEPOSIT] Amount:", amountNaira, "| Before:", balanceBefore);
 
   try {
+    if (typeof PaystackPop === 'undefined') {
+      showToast("Paystack not loaded. Refresh page.", true);
+      return;
+    }
+
+    showToast("Opening payment window...");
+
     const paystack = new PaystackPop();
     paystack.newTransaction({
       key: 'pk_live_8c5d6a001769eb3e76de51f7259e2b839568aff6',
       email: `${currentUser.username}@iuportal.edu.ng`,
       amount: Math.round(amountNaira * 100),
       currency: 'NGN',
-      onSuccess: async (txn) => {
-        const newBal = (currentUser.balance || 0) + amountNaira;
-        await window.fsUpdateUser(currentUser.username, { balance: newBal });
-        await window.fsCreateNotification({
-          forUser: currentUser.username,
-          type: 'deposit',
-          text: `💰 Deposit of ₦${amountNaira.toLocaleString()} successful!`,
-          fromUser: 'system'
-        });
-        showToast(`₦${amountNaira} deposited successfully!`);
+      metadata: {
+        custom_fields: [
+          { display_name: "Username", variable_name: "username", value: currentUser.username },
+          { display_name: "Type", variable_name: "type", value: "wallet_deposit" }
+        ]
       },
-      onError: (err) => showToast("Payment error: " + err.message, true)
+
+      onSuccess: async function(txn) {
+        console.log("[DEPOSIT] ✅ Success callback fired. Ref:", txn.reference);
+
+        try {
+          if (!currentUser || !currentUser.username) {
+            alert("Payment received but you were logged out!\n\nReference: " + txn.reference + "\n\nPlease log back in and contact support.");
+            return;
+          }
+
+          let freshUser = null;
+          try {
+            if (typeof window.fsGetUser === 'function') {
+              freshUser = await window.fsGetUser(currentUser.username);
+              console.log("[DEPOSIT] Fresh user from Firestore:", freshUser?.balance);
+            }
+          } catch (e) {
+            console.warn("[DEPOSIT] Could not fetch fresh:", e);
+          }
+
+          const baseBalance = freshUser ? (freshUser.balance || 0) : balanceBefore;
+          const newBalance = baseBalance + amountNaira;
+          console.log("[DEPOSIT] Writing balance:", newBalance, "to", currentUser.username);
+
+          await window.fsUpdateUser(currentUser.username, {
+            balance: newBalance,
+            lastDepositAt: Date.now(),
+            lastDepositAmount: amountNaira,
+            lastDepositRef: txn.reference
+          });
+          console.log("[DEPOSIT] ✅ Firestore write complete");
+
+          // Verify
+          try {
+            if (typeof window.fsGetUser === 'function') {
+              const verifyUser = await window.fsGetUser(currentUser.username);
+              console.log("[DEPOSIT] Verification read:", verifyUser?.balance);
+              if (verifyUser && verifyUser.balance !== newBalance) {
+                alert("⚠️ Balance verification failed!\n\nExpected: ₦" + newBalance.toLocaleString() + "\nActual: ₦" + (verifyUser.balance || 0).toLocaleString() + "\n\nRef: " + txn.reference + "\n\nContact support.");
+                return;
+              }
+            }
+          } catch (e) {
+            console.warn("[DEPOSIT] Verify error (non-fatal):", e);
+          }
+
+          currentUser.balance = newBalance;
+
+          try {
+            await window.fsCreateNotification({
+              forUser: currentUser.username,
+              type: 'deposit',
+              text: `💰 Deposit of ₦${amountNaira.toLocaleString()} successful! Ref: ${txn.reference.slice(-8)}`,
+              fromUser: 'system'
+            });
+          } catch (e) { console.warn("[DEPOSIT] Notif failed:", e); }
+
+          updateUserUI();
+          showToast(`✅ ₦${amountNaira.toLocaleString()} added to wallet!`);
+          alert(`✅ Deposit Successful!\n\n₦${amountNaira.toLocaleString()} added.\n\nNew Balance: ₦${newBalance.toLocaleString()}\n\nRef: ${txn.reference}`);
+
+        } catch (err) {
+          console.error("[DEPOSIT] ❌ Error in success callback:", err);
+          alert("⚠️ Payment succeeded but wallet update FAILED.\n\nError: " + err.message + "\n\nRef: " + txn.reference + "\n\nYour money is safe in Paystack. Contact support with this reference.");
+          showToast("Wallet update failed", true);
+        }
+      },
+
+      onCancel: function() {
+        console.log("[DEPOSIT] Cancelled");
+        showToast("Payment cancelled");
+      },
+
+      onError: function(err) {
+        console.error("[DEPOSIT] ❌ Paystack error:", err);
+        showToast("Payment error: " + (err.message || "unknown"), true);
+      }
     });
+
   } catch (err) {
-    (async () => {
-      const newBal = (currentUser.balance || 0) + amountNaira;
-      await window.fsUpdateUser(currentUser.username, { balance: newBal });
-      await window.fsCreateNotification({
-        forUser: currentUser.username,
-        type: 'deposit',
-        text: `💰 Deposit of ₦${amountNaira.toLocaleString()} successful! (test)`,
-        fromUser: 'system'
-      });
-      showToast(`Offline Mock: ₦${amountNaira} credited.`);
-    })();
+    console.error("[DEPOSIT] ❌ Outer error:", err);
+    showToast("Failed to launch payment: " + err.message, true);
   }
 }
 
+/* ==========================================================
+   WALLET WITHDRAW
+   ========================================================== */
 async function handleWalletWithdraw() {
   if (!currentUser) return;
   const bankName = prompt("Enter your Bank Name (e.g. GTBank, OPay, Access, Kuda):");
@@ -1570,25 +1634,13 @@ function renderNotificationsPage() {
 
 function getNotifIcon(type) {
   const map = {
-    follow: 'fa-user-plus',
-    order: 'fa-cart-shopping',
-    payout: 'fa-money-bill-wave',
-    commission: 'fa-percent',
-    refund: 'fa-rotate-left',
-    dispute: 'fa-triangle-exclamation',
-    dm: 'fa-comment',
-    ticket: 'fa-ticket',
-    ticket_reply: 'fa-reply',
-    verified: 'fa-circle-check',
-    report: 'fa-flag',
-    withdrawal: 'fa-money-bill-transfer',
-    withdrawal_paid: 'fa-circle-check',
-    withdrawal_rejected: 'fa-circle-xmark',
-    deposit: 'fa-plus-circle',
-    boost: 'fa-star',
-    new_product: 'fa-box',
-    signup: 'fa-user-plus',
-    review: 'fa-star'
+    follow: 'fa-user-plus', order: 'fa-cart-shopping', payout: 'fa-money-bill-wave',
+    commission: 'fa-percent', refund: 'fa-rotate-left', dispute: 'fa-triangle-exclamation',
+    dm: 'fa-comment', ticket: 'fa-ticket', ticket_reply: 'fa-reply',
+    verified: 'fa-circle-check', report: 'fa-flag', withdrawal: 'fa-money-bill-transfer',
+    withdrawal_paid: 'fa-circle-check', withdrawal_rejected: 'fa-circle-xmark',
+    deposit: 'fa-plus-circle', boost: 'fa-star', new_product: 'fa-box',
+    signup: 'fa-user-plus', review: 'fa-star'
   };
   return map[type] || 'fa-bell';
 }
@@ -1838,7 +1890,6 @@ async function handleSendChatMessage(e) {
     return;
   }
 
-  // AI MODE
   aiChatHistory.push({ sender: 'user', text });
   input.value = '';
   renderChatFeed();
@@ -1869,132 +1920,57 @@ async function handleSendLiveMessage(e) {
 }
 
 /* ==========================================================
-   SMART AI RESPONSE ENGINE (UPGRADED)
+   AI ENGINE
    ========================================================== */
 function generateAIResponse(text) {
   const t = text.toLowerCase();
 
-  // Escrow
   if (t.includes('escrow') || t.includes('how does buy') || t.includes('buying work')) {
-    return {
-      text: "🛡️ **Escrow System:**\n\n1. You tap 'Buy with Escrow'\n2. Money is frozen (held safely)\n3. Meet seller on campus\n4. Receive your item\n5. Tap 'Confirm Received' in your Profile\n6. Money releases to seller (95%) + 5% platform fee\n\nIf something goes wrong → tap 'Dispute' → Admin freezes funds.",
-      options: HELP_TOPICS
-    };
+    return { text: "🛡️ **Escrow System:**\n\n1. You tap 'Buy with Escrow'\n2. Money is frozen (held safely)\n3. Meet seller on campus\n4. Receive your item\n5. Tap 'Confirm Received' in your Profile\n6. Money releases to seller (95%) + 5% platform fee\n\nIf something goes wrong → tap 'Dispute' → Admin freezes funds.", options: HELP_TOPICS };
   }
-
-  // Seller payout
-  if (t.includes('payout') || t.includes('seller get paid') || t.includes('when do i get paid') || t.includes('how much will i get')) {
-    return {
-      text: "💰 **Seller Payouts:**\n\nOnce buyer taps 'Confirm Received':\n• 95% of the price goes to your wallet\n• 5% is the platform commission\n\nExample: ₦100,000 sale → ₦95,000 to you, ₦5,000 platform fee.",
-      options: HELP_TOPICS
-    };
+  if (t.includes('payout') || t.includes('seller get paid') || t.includes('when do i get paid')) {
+    return { text: "💰 **Seller Payouts:**\n\nOnce buyer taps 'Confirm Received':\n• 95% of the price goes to your wallet\n• 5% is the platform commission\n\nExample: ₦100,000 sale → ₦95,000 to you, ₦5,000 platform fee.", options: HELP_TOPICS };
   }
-
-  // Dispute / refund
   if (t.includes('refund') || t.includes('dispute') || t.includes('scam')) {
-    return {
-      text: "⚠️ **Dispute / Refund:**\n\nIf your item never arrived or was damaged:\n1. Go to Profile → My Escrow Purchases\n2. Tap **Dispute**\n3. Describe the issue\n4. Admin is notified instantly\n5. Funds freeze until resolved\n\nYou'll be notified when admin makes a decision.",
-      options: HELP_TOPICS
-    };
+    return { text: "⚠️ **Dispute / Refund:**\n\nIf your item never arrived or was damaged:\n1. Go to Profile → My Escrow Purchases\n2. Tap **Dispute**\n3. Describe the issue\n4. Admin is notified instantly\n5. Funds freeze until resolved", options: HELP_TOPICS };
   }
-
-  // Verification
   if (t.includes('verify') || t.includes('verified') || t.includes('badge') || t.includes('gold') || t.includes('silver')) {
-    return {
-      text: "🏆 **Verification Badges:**\n\n• 🥇 **Gold** — Reserved for the Master Admin\n• 🥈 **Silver** — For trusted, active sellers\n\n**How to get Silver:**\n• Be active (post items regularly)\n• Complete orders successfully\n• Keep good ratings\n• No disputes or reports\n\nAdmin reviews profiles manually and verifies top sellers — no application form. You'll get a notification when verified!",
-      options: HELP_TOPICS
-    };
+    return { text: "🏆 **Verification Badges:**\n\n• 🥇 **Gold** — Reserved for the Master Admin\n• 🥈 **Silver** — For trusted, active sellers\n\n**How to get Silver:**\n• Be active\n• Complete orders successfully\n• Keep good ratings\n• No disputes\n\nAdmin reviews manually and verifies top sellers!", options: HELP_TOPICS };
   }
-
-  // Boost
-  if (t.includes('boost') || t.includes('featured') || t.includes('top of list') || t.includes('promote')) {
-    return {
-      text: "⭐ **Boost Your Listing:**\n\n• Cost: ₦500 from your wallet\n• Duration: 24 hours\n• Effect: Your product jumps to the top of the market with a golden '⭐ FEATURED' badge\n\n**How:** Profile → My Active Listings → tap '⭐ Boost'\n\nBoost expires automatically after 24h.",
-      options: HELP_TOPICS
-    };
+  if (t.includes('boost') || t.includes('featured') || t.includes('promote')) {
+    return { text: "⭐ **Boost Your Listing:**\n\n• Cost: ₦500 from your wallet\n• Duration: 24 hours\n• Effect: Jumps to top with golden '⭐ FEATURED' badge\n\n**How:** Profile → My Active Listings → '⭐ Boost'", options: HELP_TOPICS };
   }
-
-  // Withdrawal
   if (t.includes('withdraw') || t.includes('cash out') || t.includes('bank')) {
-    return {
-      text: "💸 **Withdrawing to Bank:**\n\n1. Go to Profile → Wallet\n2. Tap 'Withdraw'\n3. Enter: Bank name, 10-digit account number, account holder name\n4. Enter amount\n5. Request goes to Admin for approval\n6. Once approved, funds are sent to your bank\n\n⚠️ Balance is deducted immediately when you request — it's refunded if admin rejects.",
-      options: HELP_TOPICS
-    };
+    return { text: "💸 **Withdrawing to Bank:**\n\n1. Profile → Wallet → 'Withdraw'\n2. Enter: Bank name, 10-digit account number, account holder name\n3. Enter amount\n4. Admin approves → funds sent\n\n⚠️ Balance deducted immediately — refunded if rejected.", options: HELP_TOPICS };
   }
-
-  // Deposit
   if (t.includes('deposit') || t.includes('add money') || t.includes('fund wallet') || t.includes('add funds') || t.includes('paystack')) {
-    return {
-      text: "💳 **Adding Money (Paystack):**\n\n1. Profile → Wallet\n2. Tap 'Add Funds'\n3. Enter amount (minimum ₦100)\n4. Complete payment via card, transfer, or USSD\n5. Balance updates instantly\n\nAll deposits are secure via Paystack (Paystack is PCI-DSS certified).",
-      options: HELP_TOPICS
-    };
+    return { text: "💳 **Adding Money (Paystack):**\n\n1. Profile → Wallet → 'Add Funds'\n2. Enter amount (min ₦100)\n3. Complete payment via card, transfer, or USSD\n4. Balance updates instantly\n\nSecure via Paystack (PCI-DSS certified).", options: HELP_TOPICS };
   }
-
-  // DM / Chat
   if (t.includes('chat') || t.includes('message seller') || t.includes('dm') || t.includes('inbox')) {
-    return {
-      text: "💬 **Chat / DMs:**\n\n• Tap 'Chat' on any product to message the seller\n• All messages appear in Chat → Direct Messages tab\n• Unread messages show a red badge on the Chat icon\n• Your messages show '✓ Sent' or '✓✓ Seen' when read\n\nYou can also long-press (or tap the ⋯ on) any message to react with 👍❤️😂🔥",
-      options: HELP_TOPICS
-    };
+    return { text: "💬 **Chat / DMs:**\n\n• Tap 'Chat' on any product\n• Messages appear in Chat → Direct Messages tab\n• Unread shows red badge on Chat icon\n• '✓ Sent' / '✓✓ Seen' indicators\n\nLong-press any message to react 👍❤️😂🔥", options: HELP_TOPICS };
   }
-
-  // Report/Block
   if (t.includes('report') || t.includes('block') || t.includes('scammer')) {
-    return {
-      text: "🚩 **Report / Block:**\n\n**Report someone:**\n• Open their profile → tap 'Report'\n• Describe the issue → admin gets notified\n\n**Block someone:**\n• Open their profile → tap 'Block'\n• You won't see their products or messages anymore\n\nMultiple reports can get a user banned by admin.",
-      options: HELP_TOPICS
-    };
+    return { text: "🚩 **Report / Block:**\n\n**Report:** Profile → 'Report' → describe issue\n**Block:** Profile → 'Block' → hides their stuff from you\n\nMultiple reports → user can be banned by admin.", options: HELP_TOPICS };
   }
-
-  // Upload product
-  if (t.includes('post') || t.includes('upload') || t.includes('sell') || t.includes('list item') || t.includes('create product')) {
-    return {
-      text: "📦 **Posting a Product:**\n\n1. Tap '+ Post' on the Market page\n2. Fill in title, category, price, description\n3. Upload 1-4 photos (auto-compressed so they load fast)\n4. Tap 'Publish Product'\n\nYour listing appears instantly to everyone on campus!\n\n💡 Tip: Good photos = more buyers. Use natural light!",
-      options: HELP_TOPICS
-    };
+  if (t.includes('post') || t.includes('upload') || t.includes('sell') || t.includes('list item')) {
+    return { text: "📦 **Posting a Product:**\n\n1. Tap '+ Post' on Market\n2. Fill in title, category, price, description\n3. Upload 1-4 photos (auto-compressed)\n4. Tap 'Publish Product'\n\nAppears instantly to everyone! 💡 Tip: Good photos = more buyers.", options: HELP_TOPICS };
   }
-
-  // Ticket
   if (t.includes('ticket') || t.includes('support') || t.includes('help me') || t.includes('complain')) {
-    return {
-      text: "🎫 **Support Tickets:**\n\nFor any issue that needs admin attention:\n1. Type your message describing the problem\n2. It goes directly to Master Admin (@chris.bone)\n3. You'll get a notification when admin replies\n\nYou can also start a ticket via the options below.",
-      showTicketForm: true,
-      options: null
-    };
+    return { text: "🎫 **Support Tickets:**\n\nDescribe your issue and send it — goes straight to Master Admin.\nYou'll get a notification when admin replies.", showTicketForm: true, options: null };
   }
-
-  // Greetings
   if (t.includes('hello') || t.includes('hi ') || t.includes('hey') || t === 'hi') {
-    return {
-      text: "Hey there! 👋 Welcome to IU Campus Portal. What can I help you with today? Pick a topic below or ask anything.",
-      options: HELP_TOPICS
-    };
+    return { text: "Hey there! 👋 Welcome to IU Campus Portal. What can I help you with today?", options: HELP_TOPICS };
   }
-
-  // Thanks
   if (t.includes('thanks') || t.includes('thank you') || t.includes('thx')) {
-    return {
-      text: "You're welcome! 😊 Let me know if you need anything else. Happy trading! 🛍️",
-      options: HELP_TOPICS
-    };
+    return { text: "You're welcome! 😊 Happy trading! 🛍️", options: HELP_TOPICS };
   }
-
-  // Balance
   if (t.includes('balance') || t.includes('wallet') || t.includes('my money')) {
     if (currentUser) {
-      return {
-        text: `💰 Your current balance is **₦${(currentUser.balance || 0).toLocaleString()}**.\n\nYou can:\n• Add funds via Paystack\n• Withdraw to your bank\n• Pay for items via escrow\n\nAnything specific you'd like to know?`,
-        options: HELP_TOPICS
-      };
+      return { text: `💰 Your current balance is **₦${(currentUser.balance || 0).toLocaleString()}**.\n\nYou can add funds, withdraw, or pay via escrow.`, options: HELP_TOPICS };
     }
     return { text: "Please log in to check your balance.", options: HELP_TOPICS };
   }
-
-  // Default
-  return {
-    text: "I'm not sure about that one. 🤔\n\nI can help with:\n• Buying & escrow\n• Selling & payouts\n• Verification\n• Wallet (deposit/withdraw)\n• Boost, reports, tickets\n\nPick a topic below or rephrase your question:",
-    options: HELP_TOPICS
-  };
+  return { text: "I'm not sure about that. 🤔\n\nI can help with:\n• Buying & escrow\n• Selling & payouts\n• Verification\n• Wallet (deposit/withdraw)\n• Boost, reports, tickets\n\nPick a topic below:", options: HELP_TOPICS };
 }
 
 function renderChatFeed() {
@@ -2091,17 +2067,17 @@ function renderChatFeed() {
 
 function handleOptionClick(key) {
   let responseText = '', isTicketForm = false;
-  if (key === 'payments') responseText = "🛡️ **Escrow:** Funds locked on purchase → released only when buyer confirms receipt. 5% platform fee on release.";
-  else if (key === 'seller_payout') responseText = "💰 **Seller Payouts:** When buyer confirms receipt, you get 95% of the price. 5% goes to platform.";
-  else if (key === 'dispute_info') responseText = "⚠️ **Dispute:** Profile → My Escrow Purchases → tap 'Dispute' → describe the issue → admin freezes funds.";
-  else if (key === 'upload_prod') responseText = "📦 **Post Product:** Tap '+ Post' on Market → fill details → upload 1-4 photos → Publish.";
-  else if (key === 'verification') responseText = "🏆 **Verification:** Silver badge is given by admin to trusted, active sellers. Keep selling, stay clean, and admin will notice!";
-  else if (key === 'boost') responseText = "⭐ **Boost:** ₦500 → 24h at top of the market. From Profile → My Active Listings → '⭐ Boost'.";
-  else if (key === 'withdraw') responseText = "💸 **Withdraw:** Profile → Wallet → 'Withdraw' → enter bank details → wait for admin approval.";
-  else if (key === 'deposit') responseText = "💳 **Deposit:** Profile → Wallet → 'Add Funds' → enter amount → pay via Paystack.";
-  else if (key === 'dm') responseText = "💬 **Chat:** Tap 'Chat' on any product or profile → messages appear in Chat → Direct Messages.";
-  else if (key === 'block_report') responseText = "🚩 **Report/Block:** Open any profile → Report or Block buttons at the bottom.";
-  else if (key === 'ticket') { responseText = "🎫 **Open Ticket:** Describe the issue below — it goes straight to admin."; isTicketForm = true; }
+  if (key === 'payments') responseText = "🛡️ **Escrow:** Funds locked on purchase → released only when buyer confirms. 5% platform fee.";
+  else if (key === 'seller_payout') responseText = "💰 **Seller Payouts:** Buyer confirms receipt → you get 95%. 5% goes to platform.";
+  else if (key === 'dispute_info') responseText = "⚠️ **Dispute:** Profile → My Escrow Purchases → 'Dispute' → describe issue → admin freezes funds.";
+  else if (key === 'upload_prod') responseText = "📦 **Post Product:** '+ Post' on Market → fill details → upload 1-4 photos → Publish.";
+  else if (key === 'verification') responseText = "🏆 **Verification:** Silver badge given by admin to trusted sellers. Keep selling!";
+  else if (key === 'boost') responseText = "⭐ **Boost:** ₦500 → 24h at top. Profile → My Active Listings → '⭐ Boost'.";
+  else if (key === 'withdraw') responseText = "💸 **Withdraw:** Profile → Wallet → 'Withdraw' → bank details → admin approval.";
+  else if (key === 'deposit') responseText = "💳 **Deposit:** Profile → Wallet → 'Add Funds' → Paystack.";
+  else if (key === 'dm') responseText = "💬 **Chat:** 'Chat' on any product → messages in Chat → Direct Messages.";
+  else if (key === 'block_report') responseText = "🚩 **Report/Block:** Open any profile → buttons at the bottom.";
+  else if (key === 'ticket') { responseText = "🎫 **Open Ticket:** Describe the issue below."; isTicketForm = true; }
 
   const sel = HELP_TOPICS.find(t => t.key === key);
   aiChatHistory.push({ sender: 'user', text: sel ? sel.label : key });
@@ -2136,7 +2112,7 @@ async function submitSupportTicket() {
 }
 
 /* ==========================================================
-   MESSAGE REACTIONS
+   REACTIONS
    ========================================================== */
 function openReactionPicker(event, msgId) {
   event.preventDefault();
@@ -2176,10 +2152,7 @@ async function replyToTicket(ticketId) {
   newThread.push({ from: 'chris.bone', text: replyText, timestamp: Date.now() });
 
   try {
-    await window.fsUpdateTicket(ticketId, {
-      adminReply: replyText,
-      thread: newThread
-    });
+    await window.fsUpdateTicket(ticketId, { adminReply: replyText, thread: newThread });
     await window.fsCreateNotification({
       forUser: t.sender,
       type: 'ticket_reply',
@@ -2198,7 +2171,6 @@ async function replyToTicket(ticketId) {
 function renderAdminPanel() {
   if (!currentUser || !currentUser.isAdmin) return;
 
-  // Announcements manager
   const annList = document.getElementById('adminAnnouncementsList');
   if (annList) {
     annList.innerHTML = announcements.length === 0
@@ -2214,7 +2186,6 @@ function renderAdminPanel() {
       `).join('');
   }
 
-  // Disputes
   const disputesList = document.getElementById('adminDisputesList');
   const disputed = orders.filter(o => o.status === 'DISPUTED');
   document.getElementById('disputedOrdersBadge').textContent = `${disputed.length} Disputed`;
@@ -2232,7 +2203,6 @@ function renderAdminPanel() {
       </div>
     `).join('');
 
-  // Withdrawals
   const wdList = document.getElementById('adminWithdrawalsList');
   const pendingWd = withdrawals.filter(w => w.status === 'Pending');
   document.getElementById('withdrawalsBadge').textContent = `${pendingWd.length} Pending`;
@@ -2257,7 +2227,6 @@ function renderAdminPanel() {
       </div>
     `).join('');
 
-  // Reports
   const reportsList = document.getElementById('adminReportsList');
   const pendingReports = reports.filter(r => r.status === 'pending');
   document.getElementById('reportsBadge').textContent = `${pendingReports.length} Open`;
@@ -2277,7 +2246,6 @@ function renderAdminPanel() {
       </div>
     `).join('');
 
-  // Tickets
   const ticketsList = document.getElementById('adminTicketsList');
   document.getElementById('ticketCountBadge').textContent = `${supportTickets.length} Tickets`;
   ticketsList.innerHTML = supportTickets.length === 0
@@ -2311,7 +2279,6 @@ function renderAdminPanel() {
       `;
     }).join('');
 
-  // Users
   const usersList = document.getElementById('adminUsersList');
   document.getElementById('totalUsersBadge').textContent = `${users.length} Registered`;
   usersList.innerHTML = users.map(u => `
@@ -2361,7 +2328,7 @@ window.onLiveChatUpdate = function (msgs) {
   const feedEl = document.getElementById('liveChatMessagesFeed');
   if (!feedEl) return;
   if (!msgs || msgs.length === 0) {
-    feedEl.innerHTML = '<p class="text-center text-xs text-purple-300/60 py-10">No messages yet. Be the first to say hi! 👋</p>';
+    feedEl.innerHTML = '<p class="text-center text-xs text-purple-300/60 py-10">No messages yet. Be the first!</p>';
     return;
   }
   const me = currentUser ? currentUser.username : null;
@@ -2448,7 +2415,7 @@ window.onFirestoreSync = function (collection) {
 };
 
 /* ==========================================================
-   PWA — Install prompt
+   PWA
    ========================================================== */
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
@@ -2460,21 +2427,16 @@ async function installPWA() {
   if (!deferredPrompt) return;
   deferredPrompt.prompt();
   const { outcome } = await deferredPrompt.userChoice;
-  if (outcome === 'accepted') {
-    showToast("App installed! 🎉");
-  }
+  if (outcome === 'accepted') showToast("App installed! 🎉");
   deferredPrompt = null;
   document.getElementById('pwaInstallBtn')?.classList.remove('show');
 }
 
 /* ==========================================================
-   PUSH NOTIFICATION SOUND
+   NOTIFICATION SOUND
    ========================================================== */
-let lastNotifCount = 0;
 window.onNewNotificationForPush = function (notif) {
-  // Only play if recipient is current user
   if (!currentUser || notif.forUser !== currentUser.username) return;
-  // Simple beep via Web Audio API
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const osc = ctx.createOscillator();
@@ -2503,11 +2465,9 @@ document.addEventListener('click', (e) => {
     const v = parseInt(target.dataset.value, 10);
     if (!isNaN(v)) setRatingValue(v);
   }
-  // Close reaction picker if clicking outside
   if (!e.target.closest('.reaction-picker') && !e.target.closest('.msg-reactions-bar')) {
     if (reactionPickerMsgId) {
       reactionPickerMsgId = null;
-      // don't re-render unless we're in DM mode
       if (activeChatTarget) renderChatFeed();
     }
   }
