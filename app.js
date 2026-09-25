@@ -1,8 +1,7 @@
 // ==========================================================
 // IGBINEDION UNIVERSITY CAMPUS PORTAL - APP.JS
-// All UI logic, features, and event handlers
-// UPDATED: Notifications page, DM inbox, Chat tab swap,
-// full notification wiring, ticket replies, seen indicators
+// UPDATED: Announcements, view counter, lightbox, message
+// reactions, PWA support, upgraded AI Assistant
 // ==========================================================
 
 /* ---------- GLOBAL STATE ---------- */
@@ -16,34 +15,51 @@ let notifications = [];
 let reviews = [];
 let withdrawals = [];
 let reports = [];
+let announcements = [];
 
 let activeChatTarget = null;
 let activeTagFilter = 'all';
 let currentAppTheme = localStorage.getItem('iu_theme') || 'party';
 let currentDetailSeller = '';
-let currentChatMode = 'ai';           // 'ai' | 'live'
-let currentChatSubMode = 'ai';        // 'ai' | 'inbox' | 'convo'
+let currentChatMode = 'ai';
+let currentChatSubMode = 'ai';
 let tempProductImagesBase64 = [];
 let tempSignupAvatarBase64 = '';
 let dbReady = false;
 let searchMode = 'products';
 let currentRatingOrderId = null;
 let currentRatingValue = 0;
-let notifFilter = 'all';              // 'all' | 'orders' | 'messages' | 'system'
+let notifFilter = 'all';
+
+// Lightbox state
+let lightboxImages = [];
+let lightboxIndex = 0;
+
+// Reaction picker state
+let reactionPickerMsgId = null;
+
+// PWA state
+let deferredPrompt = null;
 
 let aiChatHistory = [{
   id: 1,
   sender: 'ai',
-  text: "Hello! Welcome to IU Campus Escrow Portal 😊✨\n\nI am fully updated on our Escrow System! How can I assist?",
+  text: "Hello! Welcome to IU Campus Escrow Portal 😊✨\n\nI'm your smart assistant. I know everything about buying, selling, escrow, verification, withdrawal, and more!\n\nHow can I help?",
   options: null
 }];
 
 const HELP_TOPICS = [
-  { key: 'payments', label: '🛡️ Escrow & Buyer Approval Workflow' },
-  { key: 'seller_payout', label: '💰 How & When Sellers Get Paid (5% Fee)' },
-  { key: 'dispute_info', label: '⚠️ Request Refund / Escrow Lock' },
-  { key: 'upload_prod', label: '📦 How to Upload Product Image' },
-  { key: 'ticket', label: '🎫 Open Scam Dispute / Support Ticket' }
+  { key: 'payments', label: '🛡️ Escrow & Buyer Approval' },
+  { key: 'seller_payout', label: '💰 Seller Payouts & 5% Fee' },
+  { key: 'dispute_info', label: '⚠️ Refund / Dispute Escrow' },
+  { key: 'upload_prod', label: '📦 Post a Product (with photos)' },
+  { key: 'verification', label: '🏆 Get Verified (Gold/Silver)' },
+  { key: 'boost', label: '⭐ Boost My Listing' },
+  { key: 'withdraw', label: '💸 Withdraw to Bank' },
+  { key: 'deposit', label: '💳 Deposit with Paystack' },
+  { key: 'dm', label: '💬 Chat / DM Someone' },
+  { key: 'block_report', label: '🚩 Report or Block a User' },
+  { key: 'ticket', label: '🎫 Open Support Ticket' }
 ];
 
 /* ==========================================================
@@ -109,6 +125,29 @@ function compressImage(file, maxWidth = 800, quality = 0.6) {
   });
 }
 
+/* Higher quality for lightbox original */
+function compressImageHigh(file, maxWidth = 1400, quality = 0.75) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width, height = img.height;
+        if (width > maxWidth) { height = (height * maxWidth) / width; width = maxWidth; }
+        canvas.width = width; canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 /* ==========================================================
    THEME
    ========================================================== */
@@ -117,23 +156,6 @@ function setAppTheme(themeName, save = true) {
   document.getElementById('appBody').className =
     `font-sans min-h-screen text-slate-100 relative overflow-x-hidden selection:bg-purple-500 selection:text-white theme-${themeName}`;
   if (save) localStorage.setItem('iu_theme', themeName);
-  updateThemeToggleIcon();
-}
-
-function toggleThemeQuick() {
-  const themes = ['party', 'blue', 'dark'];
-  const idx = themes.indexOf(currentAppTheme);
-  const next = themes[(idx + 1) % themes.length];
-  setAppTheme(next);
-  showToast(`Theme: ${next.charAt(0).toUpperCase() + next.slice(1)} 🎨`);
-}
-
-function updateThemeToggleIcon() {
-  const icon = document.getElementById('themeToggleIcon');
-  if (!icon) return;
-  if (currentAppTheme === 'dark') icon.className = 'fa-solid fa-moon text-xs theme-toggle-icon';
-  else if (currentAppTheme === 'blue') icon.className = 'fa-solid fa-water text-xs theme-toggle-icon';
-  else icon.className = 'fa-solid fa-sun text-xs theme-toggle-icon';
 }
 
 /* ==========================================================
@@ -169,7 +191,7 @@ function showSection(sectionId) {
 }
 
 /* ==========================================================
-   VERIFICATION BADGE HELPER
+   VERIFICATION BADGE
    ========================================================== */
 function renderVerifiedBadge(username) {
   const u = users.find(x => x.username === username);
@@ -181,7 +203,7 @@ function renderVerifiedBadge(username) {
 }
 
 /* ==========================================================
-   USER RATING HELPER
+   STARS / RATINGS
    ========================================================== */
 function renderStars(rating, size = 'text-[10px]') {
   const full = Math.round(rating || 0);
@@ -200,7 +222,72 @@ function getUserRating(username) {
 }
 
 /* ==========================================================
-   MARKET: FILTERS & TABS
+   ANNOUNCEMENTS
+   ========================================================== */
+function renderAnnouncements() {
+  const container = document.getElementById('announcementContainer');
+  if (!container) return;
+
+  const myDismissed = (currentUser && currentUser.dismissedAnnouncements) || [];
+  const visible = announcements.filter(a => !myDismissed.includes(a.id));
+
+  if (!visible.length) {
+    container.innerHTML = '';
+    return;
+  }
+
+  container.innerHTML = visible.map(a => `
+    <div class="announcement-banner animate-slide-down">
+      <div class="announcement-close" onclick="dismissAnnouncement('${a.id}')">
+        <i class="fa-solid fa-xmark"></i>
+      </div>
+      <div class="flex items-start gap-2">
+        <div class="announcement-icon"><i class="fa-solid fa-bullhorn"></i></div>
+        <div class="flex-1">
+          <div class="announcement-title">📢 Announcement</div>
+          <div class="announcement-text">${escapeHtml(a.text)}</div>
+          <div class="announcement-time">${timeAgo(a.timestamp)}</div>
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function dismissAnnouncement(id) {
+  if (!currentUser) return;
+  const dismissed = [...(currentUser.dismissedAnnouncements || []), id];
+  currentUser.dismissedAnnouncements = dismissed;
+  try {
+    await window.fsUpdateUser(currentUser.username, { dismissedAnnouncements: dismissed });
+    renderAnnouncements();
+  } catch (err) { /* silent */ }
+}
+
+async function postAnnouncement() {
+  if (!currentUser || !currentUser.isAdmin) return;
+  const text = prompt("📢 Enter announcement text (will be shown to everyone):");
+  if (!text || !text.trim()) return;
+
+  try {
+    await window.fsCreateAnnouncement({
+      text: text.trim(),
+      postedBy: currentUser.username
+    });
+    showToast("Announcement posted to everyone! 📢");
+  } catch (err) { showToast("Post failed", true); }
+}
+
+async function deleteAnnouncement(id) {
+  if (!currentUser || !currentUser.isAdmin) return;
+  if (!confirm("Delete this announcement?")) return;
+  try {
+    await window.fsDeleteAnnouncement(id);
+    showToast("Announcement deleted");
+  } catch (err) { showToast("Failed", true); }
+}
+
+/* ==========================================================
+   MARKET TABS
    ========================================================== */
 function switchMarketTab(tabType) {
   const buyGrid = document.getElementById('buyProductGrid');
@@ -247,7 +334,7 @@ function setSearchMode(mode) {
 }
 
 /* ==========================================================
-   PRODUCT IMAGES UPLOAD (MULTI)
+   MULTI IMAGE UPLOAD
    ========================================================== */
 async function handleMultiImageUpload(e) {
   const files = Array.from(e.target.files || []);
@@ -269,9 +356,7 @@ function renderImagePreviews() {
   const box = document.getElementById('imagePreviewBox');
   if (!box) return;
   if (tempProductImagesBase64.length === 0) {
-    box.classList.add('hidden');
-    box.innerHTML = '';
-    return;
+    box.classList.add('hidden'); box.innerHTML = ''; return;
   }
   box.classList.remove('hidden');
   box.innerHTML = tempProductImagesBase64.map((img, i) => `
@@ -319,9 +404,13 @@ function renderProducts() {
     (activeTagFilter === 'all' || p.tag === activeTagFilter)
   );
 
+  // Auto-expire boosts + sort
+  const now = Date.now();
   activeProducts.sort((a, b) => {
-    if (a.featured && !b.featured) return -1;
-    if (!a.featured && b.featured) return 1;
+    const aFeat = a.featured && (!a.featuredUntil || a.featuredUntil > now);
+    const bFeat = b.featured && (!b.featuredUntil || b.featuredUntil > now);
+    if (aFeat && !bFeat) return -1;
+    if (!aFeat && bFeat) return 1;
     return (b.createdAt || 0) - (a.createdAt || 0);
   });
 
@@ -334,9 +423,11 @@ function renderProducts() {
     const images = p.images && p.images.length ? p.images : [p.imageUrl].filter(Boolean);
     const firstImg = images[0] || '';
     const { rating } = getUserRating(p.seller);
+    const views = p.views || 0;
+    const isFeatured = p.featured && (!p.featuredUntil || p.featuredUntil > now);
 
     return `
-      <div class="glass-card flex flex-col justify-between overflow-hidden group ${isBanned ? 'opacity-60 border-red-500/40' : ''} ${p.featured ? 'product-featured' : ''}">
+      <div class="glass-card flex flex-col justify-between overflow-hidden group ${isBanned ? 'opacity-60 border-red-500/40' : ''} ${isFeatured ? 'product-featured' : ''}">
         <div>
           <div class="p-2.5 bg-white/5 border-b border-white/10 flex items-center justify-between">
             <div class="flex items-center gap-2 truncate cursor-pointer" onclick="viewUserProfile('${p.seller}')">
@@ -349,8 +440,9 @@ function renderProducts() {
           <div class="h-32 flex items-center justify-center overflow-hidden relative cursor-pointer" onclick="openProductDetail('${p.id}')">
             <img src="${firstImg}" class="w-full h-full object-cover group-hover:scale-105 transition duration-300" alt="${escapeHtml(p.title)}">
             <span class="absolute top-2 right-2 bg-purple-950/80 text-purple-200 border border-white/20 text-[8px] font-bold px-2 py-0.5 rounded-full backdrop-blur-md">${escapeHtml(p.tag)}</span>
-            ${p.featured ? `<span class="absolute top-2 left-2 badge-featured text-[8px] px-2 py-0.5 rounded-full">⭐ FEATURED</span>` : ''}
+            ${isFeatured ? `<span class="absolute top-2 left-2 badge-featured text-[8px] px-2 py-0.5 rounded-full">⭐ FEATURED</span>` : ''}
             ${images.length > 1 ? `<span class="absolute bottom-2 right-2 bg-black/60 text-white text-[8px] font-bold px-1.5 py-0.5 rounded-full">${images.length} 📷</span>` : ''}
+            ${views > 0 ? `<span class="absolute bottom-2 left-2 view-counter ${views > 20 ? 'hot' : ''}">${views > 20 ? '🔥' : '👁'} ${views}</span>` : ''}
           </div>
           <div class="p-3">
             <h3 class="text-xs font-bold text-white truncate cursor-pointer" onclick="openProductDetail('${p.id}')">${escapeHtml(p.title)}</h3>
@@ -425,20 +517,24 @@ function renderMyListings() {
     container.innerHTML = `<p class="text-[11px] text-purple-300/60 italic">No active product listings.</p>`;
     return;
   }
+  const now = Date.now();
   container.innerHTML = myProds.map(p => {
     const imgs = p.images && p.images.length ? p.images : [p.imageUrl].filter(Boolean);
     const img = imgs[0] || '';
+    const isFeatured = p.featured && (!p.featuredUntil || p.featuredUntil > now);
+    const views = p.views || 0;
     return `
-      <div class="p-2.5 bg-white/5 rounded-xl border border-white/10 flex items-center justify-between ${p.featured ? 'product-featured' : ''}">
+      <div class="p-2.5 bg-white/5 rounded-xl border border-white/10 flex items-center justify-between ${isFeatured ? 'product-featured' : ''}">
         <div class="flex items-center gap-2 truncate cursor-pointer" onclick="openProductDetail('${p.id}')">
           <img src="${img}" class="w-10 h-10 rounded-lg object-cover shrink-0">
           <div class="truncate">
             <span class="font-bold text-white block truncate text-xs">${escapeHtml(p.title)}</span>
             <span class="text-[10px] text-amber-300">₦${(p.price || 0).toLocaleString()} • <strong class="${p.status === 'sold' ? 'text-emerald-400' : 'text-purple-200'} uppercase">${p.status}</strong></span>
+            <span class="text-[9px] text-purple-300/70 block">👁 ${views} views ${isFeatured ? '• ⭐ Featured' : ''}</span>
           </div>
         </div>
         <div class="flex flex-col gap-1">
-          ${p.status === 'active' && !p.featured ? `<button onclick="boostProduct('${p.id}')" class="bg-amber-500/80 hover:bg-amber-500 text-black px-2 py-1 rounded-lg text-[9px] font-bold whitespace-nowrap">⭐ Boost</button>` : ''}
+          ${p.status === 'active' && !isFeatured ? `<button onclick="boostProduct('${p.id}')" class="bg-amber-500/80 hover:bg-amber-500 text-black px-2 py-1 rounded-lg text-[9px] font-bold whitespace-nowrap">⭐ Boost</button>` : ''}
           <button onclick="deleteMyProduct('${p.id}')" class="bg-red-600/80 hover:bg-red-500 text-white px-2.5 py-1.5 rounded-lg text-[10px] font-bold">Delete</button>
         </div>
       </div>
@@ -447,7 +543,7 @@ function renderMyListings() {
 }
 
 /* ==========================================================
-   PRODUCT DETAIL MODAL
+   PRODUCT DETAIL + LIGHTBOX
    ========================================================== */
 let detailImgIndex = 0;
 let detailImages = [];
@@ -464,6 +560,10 @@ function openProductDetail(productId) {
   document.getElementById('detailProdTitle').textContent = p.title;
   document.getElementById('detailProdPrice').textContent = `₦ ${(p.price || 0).toLocaleString()}`;
   document.getElementById('detailProdDescription').textContent = p.description;
+
+  // View counter
+  const viewsEl = document.getElementById('detailProdViews');
+  if (viewsEl) viewsEl.textContent = `👁 ${(p.views || 0)} views`;
 
   renderDetailCarousel();
 
@@ -491,6 +591,14 @@ function openProductDetail(productId) {
     buyBtn.setAttribute('onclick',
       `closeModal('productDetailModal'); guardedAction(() => initiateEscrowPurchase('${p.id}'))`);
   }
+
+  // Increment view count (once per session per product)
+  const viewKey = 'viewed_' + productId;
+  if (!sessionStorage.getItem(viewKey)) {
+    sessionStorage.setItem(viewKey, '1');
+    window.fsIncrementProductView(productId);
+  }
+
   openModal('productDetailModal');
 }
 
@@ -513,8 +621,43 @@ function changeDetailImage(dir) {
   renderDetailCarousel();
 }
 
+function openLightbox(imageList, startIndex = 0) {
+  lightboxImages = imageList;
+  lightboxIndex = startIndex;
+  renderLightbox();
+}
+
+function renderLightbox() {
+  let overlay = document.getElementById('lightboxOverlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'lightboxOverlay';
+    overlay.className = 'lightbox-overlay';
+    overlay.onclick = (e) => { if (e.target === overlay) closeLightbox(); };
+    document.body.appendChild(overlay);
+  }
+  overlay.innerHTML = `
+    <div class="lightbox-close" onclick="closeLightbox()"><i class="fa-solid fa-xmark"></i></div>
+    ${lightboxImages.length > 1 ? `
+      <div class="lightbox-nav left" onclick="lightboxNav(-1)"><i class="fa-solid fa-chevron-left"></i></div>
+      <div class="lightbox-nav right" onclick="lightboxNav(1)"><i class="fa-solid fa-chevron-right"></i></div>
+    ` : ''}
+    <img src="${lightboxImages[lightboxIndex]}" class="lightbox-img" alt="Preview">
+    ${lightboxImages.length > 1 ? `<div class="lightbox-counter">${lightboxIndex + 1} / ${lightboxImages.length}</div>` : ''}
+  `;
+}
+
+function lightboxNav(dir) {
+  lightboxIndex = (lightboxIndex + dir + lightboxImages.length) % lightboxImages.length;
+  renderLightbox();
+}
+
+function closeLightbox() {
+  document.getElementById('lightboxOverlay')?.remove();
+}
+
 /* ==========================================================
-   USER PROFILE MODAL
+   USER PROFILE
    ========================================================== */
 function viewUserProfile(username) {
   const targetUser = users.find(u => u.username === username);
@@ -744,6 +887,7 @@ async function handleSignup(e) {
     avatarUrl: tempSignupAvatarBase64 || '',
     followers: [], following: ['chris.bone'],
     blocked: [],
+    dismissedAnnouncements: [],
     rating: 0, ratingCount: 0,
     createdAt: Date.now()
   };
@@ -793,7 +937,7 @@ function handleLogout() {
 }
 
 /* ==========================================================
-   USER UI UPDATE
+   USER UI
    ========================================================== */
 function updateUserUI() {
   if (!currentUser) return;
@@ -846,6 +990,7 @@ function updateUserUI() {
 
   renderNotificationBell();
   renderNavBadges();
+  renderAnnouncements();
 }
 
 /* ==========================================================
@@ -897,6 +1042,7 @@ async function handleCreateProduct(e) {
     imageUrl: tempProductImagesBase64[0],
     images: [...tempProductImagesBase64],
     featured: false,
+    views: 0,
     createdAt: Date.now()
   };
 
@@ -952,8 +1098,6 @@ async function initiateEscrowPurchase(productId) {
     await window.fsUpdateUser(currentUser.username, { balance: newBalance });
     await window.fsCreateOrder(newOrder);
     await window.fsUpdateProduct(item.id, { status: 'pending_sale' });
-
-    // Notify seller
     await window.fsCreateNotification({
       forUser: item.seller,
       type: 'order',
@@ -961,7 +1105,6 @@ async function initiateEscrowPurchase(productId) {
       fromUser: currentUser.username,
       link: { type: 'order', value: newOrder.id }
     });
-    // Notify admin
     await window.fsCreateNotification({
       forUser: 'chris.bone',
       type: 'order',
@@ -988,14 +1131,12 @@ async function confirmBuyerReceipt(orderId) {
     await window.fsUpdateOrder(order.id, { status: 'COMPLETED' });
     await window.fsUpdateProduct(order.productId, { status: 'sold' });
 
-    // Notify seller
     await window.fsCreateNotification({
       forUser: order.seller,
       type: 'payout',
       text: `🎉 ₦${sellerPayout.toLocaleString()} released to your wallet for "${order.title}"`,
       fromUser: 'system'
     });
-    // Notify admin
     await window.fsCreateNotification({
       forUser: 'chris.bone',
       type: 'commission',
@@ -1193,7 +1334,7 @@ function renderMyReviews() {
 }
 
 /* ==========================================================
-   WALLET: DEPOSIT + WITHDRAWAL
+   WALLET
    ========================================================== */
 function handleWalletDeposit() {
   if (!currentUser) return;
@@ -1229,7 +1370,7 @@ function handleWalletDeposit() {
       await window.fsCreateNotification({
         forUser: currentUser.username,
         type: 'deposit',
-        text: `💰 Deposit of ₦${amountNaira.toLocaleString()} successful! (test mode)`,
+        text: `💰 Deposit of ₦${amountNaira.toLocaleString()} successful! (test)`,
         fromUser: 'system'
       });
       showToast(`Offline Mock: ₦${amountNaira} credited.`);
@@ -1323,7 +1464,7 @@ async function rejectWithdrawal(id) {
 }
 
 /* ==========================================================
-   VERIFICATION (ADMIN)
+   VERIFICATION
    ========================================================== */
 async function verifyUser(username, tier) {
   if (!currentUser || !currentUser.isAdmin) return;
@@ -1350,7 +1491,7 @@ async function unverifyUser(username) {
 }
 
 /* ==========================================================
-   NOTIFICATIONS — bell + page
+   NOTIFICATIONS
    ========================================================== */
 function renderNotificationBell() {
   if (!currentUser) return;
@@ -1390,7 +1531,6 @@ function renderNotificationsPage() {
 
   let myNotifs = notifications.filter(n => n.forUser === currentUser.username);
 
-  // Apply filter
   const orderTypes = ['order', 'payout', 'commission', 'refund', 'dispute', 'boost', 'new_product'];
   const messageTypes = ['dm', 'ticket', 'ticket_reply'];
   const systemTypes = ['follow', 'signup', 'verified', 'report', 'withdrawal', 'withdrawal_paid', 'withdrawal_rejected', 'deposit'];
@@ -1465,17 +1605,15 @@ function getNotifIconClass(type) {
 }
 
 async function handleNotifClick(id, linkType, linkValue) {
-  // mark as read
   try { await window.fsMarkNotifRead(id); } catch (e) { }
 
-  if (linkType === 'user' && linkValue) {
-    viewUserProfile(linkValue);
-  } else if (linkType === 'product' && linkValue) {
+  if (linkType === 'user' && linkValue) viewUserProfile(linkValue);
+  else if (linkType === 'product' && linkValue) {
     const p = products.find(x => x.id === linkValue);
     if (p) openProductDetail(linkValue);
-  } else if (linkType === 'order' && linkValue) {
-    showSection('profileSection');
-  } else if (linkType === 'ticket') {
+  }
+  else if (linkType === 'order' && linkValue) showSection('profileSection');
+  else if (linkType === 'ticket') {
     if (currentUser?.isAdmin) showSection('adminSection');
   }
   renderNotificationsPage();
@@ -1492,7 +1630,7 @@ async function markAllNotifsRead() {
 }
 
 /* ==========================================================
-   NAV BADGE (unread DMs on bottom nav)
+   NAV BADGES
    ========================================================== */
 function renderNavBadges() {
   const chatNavBadge = document.getElementById('chatNavBadge');
@@ -1509,7 +1647,7 @@ function renderNavBadges() {
 }
 
 /* ==========================================================
-   CHAT — AI / LIVE / DM INBOX / CONVERSATION
+   CHAT
    ========================================================== */
 function switchChatMode(mode) {
   currentChatMode = mode;
@@ -1531,7 +1669,6 @@ function switchChatMode(mode) {
   }
 }
 
-/* Swap between AI Assistant and DM Inbox inside the AI panel */
 function switchAiSubMode(mode) {
   currentChatSubMode = mode;
   const aiView = document.getElementById('aiSubView');
@@ -1555,15 +1692,11 @@ function switchAiSubMode(mode) {
   }
 }
 
-/* ==========================================================
-   DM INBOX (WhatsApp-style)
-   ========================================================== */
 function renderDMInbox() {
   const list = document.getElementById('dmInboxList');
   const empty = document.getElementById('dmInboxEmpty');
   if (!list || !currentUser) return;
 
-  // Build conversations map
   const convoMap = new Map();
   const myDms = directMessages.filter(m =>
     m.sender === currentUser.username || m.receiver === currentUser.username
@@ -1572,11 +1705,7 @@ function renderDMInbox() {
   myDms.forEach(m => {
     const other = m.sender === currentUser.username ? m.receiver : m.sender;
     if (!convoMap.has(other)) {
-      convoMap.set(other, {
-        withUser: other,
-        lastMsg: m,
-        unread: 0
-      });
+      convoMap.set(other, { withUser: other, lastMsg: m, unread: 0 });
     }
     if (m.receiver === currentUser.username && !m.isRead) {
       convoMap.get(other).unread += 1;
@@ -1622,7 +1751,6 @@ async function openDMConversation(username) {
   if (!currentUser) return;
   activeChatTarget = username;
 
-  // Mark incoming messages as read
   const unreadMsgs = directMessages.filter(m =>
     m.sender === username && m.receiver === currentUser.username && !m.isRead
   );
@@ -1660,7 +1788,8 @@ async function startSellerDirectChat(sellerUsername, productTitle) {
       text: `Hi @${sellerUsername}, regarding "${productTitle}". Is it still available?`,
       timestamp: formatTime(Date.now()),
       timestampMs: Date.now(),
-      isRead: false
+      isRead: false,
+      reactions: {}
     });
     await window.fsCreateNotification({
       forUser: sellerUsername,
@@ -1695,7 +1824,8 @@ async function handleSendChatMessage(e) {
       text,
       timestamp: formatTime(Date.now()),
       timestampMs: Date.now(),
-      isRead: false
+      isRead: false,
+      reactions: {}
     });
     await window.fsCreateNotification({
       forUser: activeChatTarget,
@@ -1708,15 +1838,14 @@ async function handleSendChatMessage(e) {
     return;
   }
 
+  // AI MODE
   aiChatHistory.push({ sender: 'user', text });
   input.value = '';
   renderChatFeed();
 
   setTimeout(() => {
-    let aiReply = "I received your message. How can I help you regarding purchases, escrow, or support?";
-    if (text.toLowerCase().includes("escrow") || text.toLowerCase().includes("buy"))
-      aiReply = "🛡️ **Escrow Protection Active!**\n\nWhen you buy an item, funds are held safely until you confirm receipt.";
-    aiChatHistory.push({ sender: 'ai', text: aiReply, options: HELP_TOPICS });
+    const aiReply = generateAIResponse(text);
+    aiChatHistory.push({ sender: 'ai', text: aiReply.text, options: aiReply.options });
     renderChatFeed();
   }, 500);
 }
@@ -1737,6 +1866,135 @@ async function handleSendLiveMessage(e) {
     });
     input.value = '';
   } catch (err) { showToast("Failed to send: " + err.message, true); }
+}
+
+/* ==========================================================
+   SMART AI RESPONSE ENGINE (UPGRADED)
+   ========================================================== */
+function generateAIResponse(text) {
+  const t = text.toLowerCase();
+
+  // Escrow
+  if (t.includes('escrow') || t.includes('how does buy') || t.includes('buying work')) {
+    return {
+      text: "🛡️ **Escrow System:**\n\n1. You tap 'Buy with Escrow'\n2. Money is frozen (held safely)\n3. Meet seller on campus\n4. Receive your item\n5. Tap 'Confirm Received' in your Profile\n6. Money releases to seller (95%) + 5% platform fee\n\nIf something goes wrong → tap 'Dispute' → Admin freezes funds.",
+      options: HELP_TOPICS
+    };
+  }
+
+  // Seller payout
+  if (t.includes('payout') || t.includes('seller get paid') || t.includes('when do i get paid') || t.includes('how much will i get')) {
+    return {
+      text: "💰 **Seller Payouts:**\n\nOnce buyer taps 'Confirm Received':\n• 95% of the price goes to your wallet\n• 5% is the platform commission\n\nExample: ₦100,000 sale → ₦95,000 to you, ₦5,000 platform fee.",
+      options: HELP_TOPICS
+    };
+  }
+
+  // Dispute / refund
+  if (t.includes('refund') || t.includes('dispute') || t.includes('scam')) {
+    return {
+      text: "⚠️ **Dispute / Refund:**\n\nIf your item never arrived or was damaged:\n1. Go to Profile → My Escrow Purchases\n2. Tap **Dispute**\n3. Describe the issue\n4. Admin is notified instantly\n5. Funds freeze until resolved\n\nYou'll be notified when admin makes a decision.",
+      options: HELP_TOPICS
+    };
+  }
+
+  // Verification
+  if (t.includes('verify') || t.includes('verified') || t.includes('badge') || t.includes('gold') || t.includes('silver')) {
+    return {
+      text: "🏆 **Verification Badges:**\n\n• 🥇 **Gold** — Reserved for the Master Admin\n• 🥈 **Silver** — For trusted, active sellers\n\n**How to get Silver:**\n• Be active (post items regularly)\n• Complete orders successfully\n• Keep good ratings\n• No disputes or reports\n\nAdmin reviews profiles manually and verifies top sellers — no application form. You'll get a notification when verified!",
+      options: HELP_TOPICS
+    };
+  }
+
+  // Boost
+  if (t.includes('boost') || t.includes('featured') || t.includes('top of list') || t.includes('promote')) {
+    return {
+      text: "⭐ **Boost Your Listing:**\n\n• Cost: ₦500 from your wallet\n• Duration: 24 hours\n• Effect: Your product jumps to the top of the market with a golden '⭐ FEATURED' badge\n\n**How:** Profile → My Active Listings → tap '⭐ Boost'\n\nBoost expires automatically after 24h.",
+      options: HELP_TOPICS
+    };
+  }
+
+  // Withdrawal
+  if (t.includes('withdraw') || t.includes('cash out') || t.includes('bank')) {
+    return {
+      text: "💸 **Withdrawing to Bank:**\n\n1. Go to Profile → Wallet\n2. Tap 'Withdraw'\n3. Enter: Bank name, 10-digit account number, account holder name\n4. Enter amount\n5. Request goes to Admin for approval\n6. Once approved, funds are sent to your bank\n\n⚠️ Balance is deducted immediately when you request — it's refunded if admin rejects.",
+      options: HELP_TOPICS
+    };
+  }
+
+  // Deposit
+  if (t.includes('deposit') || t.includes('add money') || t.includes('fund wallet') || t.includes('add funds') || t.includes('paystack')) {
+    return {
+      text: "💳 **Adding Money (Paystack):**\n\n1. Profile → Wallet\n2. Tap 'Add Funds'\n3. Enter amount (minimum ₦100)\n4. Complete payment via card, transfer, or USSD\n5. Balance updates instantly\n\nAll deposits are secure via Paystack (Paystack is PCI-DSS certified).",
+      options: HELP_TOPICS
+    };
+  }
+
+  // DM / Chat
+  if (t.includes('chat') || t.includes('message seller') || t.includes('dm') || t.includes('inbox')) {
+    return {
+      text: "💬 **Chat / DMs:**\n\n• Tap 'Chat' on any product to message the seller\n• All messages appear in Chat → Direct Messages tab\n• Unread messages show a red badge on the Chat icon\n• Your messages show '✓ Sent' or '✓✓ Seen' when read\n\nYou can also long-press (or tap the ⋯ on) any message to react with 👍❤️😂🔥",
+      options: HELP_TOPICS
+    };
+  }
+
+  // Report/Block
+  if (t.includes('report') || t.includes('block') || t.includes('scammer')) {
+    return {
+      text: "🚩 **Report / Block:**\n\n**Report someone:**\n• Open their profile → tap 'Report'\n• Describe the issue → admin gets notified\n\n**Block someone:**\n• Open their profile → tap 'Block'\n• You won't see their products or messages anymore\n\nMultiple reports can get a user banned by admin.",
+      options: HELP_TOPICS
+    };
+  }
+
+  // Upload product
+  if (t.includes('post') || t.includes('upload') || t.includes('sell') || t.includes('list item') || t.includes('create product')) {
+    return {
+      text: "📦 **Posting a Product:**\n\n1. Tap '+ Post' on the Market page\n2. Fill in title, category, price, description\n3. Upload 1-4 photos (auto-compressed so they load fast)\n4. Tap 'Publish Product'\n\nYour listing appears instantly to everyone on campus!\n\n💡 Tip: Good photos = more buyers. Use natural light!",
+      options: HELP_TOPICS
+    };
+  }
+
+  // Ticket
+  if (t.includes('ticket') || t.includes('support') || t.includes('help me') || t.includes('complain')) {
+    return {
+      text: "🎫 **Support Tickets:**\n\nFor any issue that needs admin attention:\n1. Type your message describing the problem\n2. It goes directly to Master Admin (@chris.bone)\n3. You'll get a notification when admin replies\n\nYou can also start a ticket via the options below.",
+      showTicketForm: true,
+      options: null
+    };
+  }
+
+  // Greetings
+  if (t.includes('hello') || t.includes('hi ') || t.includes('hey') || t === 'hi') {
+    return {
+      text: "Hey there! 👋 Welcome to IU Campus Portal. What can I help you with today? Pick a topic below or ask anything.",
+      options: HELP_TOPICS
+    };
+  }
+
+  // Thanks
+  if (t.includes('thanks') || t.includes('thank you') || t.includes('thx')) {
+    return {
+      text: "You're welcome! 😊 Let me know if you need anything else. Happy trading! 🛍️",
+      options: HELP_TOPICS
+    };
+  }
+
+  // Balance
+  if (t.includes('balance') || t.includes('wallet') || t.includes('my money')) {
+    if (currentUser) {
+      return {
+        text: `💰 Your current balance is **₦${(currentUser.balance || 0).toLocaleString()}**.\n\nYou can:\n• Add funds via Paystack\n• Withdraw to your bank\n• Pay for items via escrow\n\nAnything specific you'd like to know?`,
+        options: HELP_TOPICS
+      };
+    }
+    return { text: "Please log in to check your balance.", options: HELP_TOPICS };
+  }
+
+  // Default
+  return {
+    text: "I'm not sure about that one. 🤔\n\nI can help with:\n• Buying & escrow\n• Selling & payouts\n• Verification\n• Wallet (deposit/withdraw)\n• Boost, reports, tickets\n\nPick a topic below or rephrase your question:",
+    options: HELP_TOPICS
+  };
 }
 
 function renderChatFeed() {
@@ -1770,14 +2028,30 @@ function renderChatFeed() {
             ? `<span class="msg-seen"><i class="fa-solid fa-check-double"></i> Seen</span>`
             : `<span class="msg-delivered"><i class="fa-solid fa-check"></i> Sent</span>`;
         }
+        const reactions = m.reactions || {};
+        const reactionKeys = Object.keys(reactions).filter(k => (reactions[k] || []).length > 0);
+        const reactionsHtml = reactionKeys.length > 0
+          ? `<div class="msg-reactions-bar">` + reactionKeys.map(emoji => {
+            const usersWhoReacted = reactions[emoji] || [];
+            const mineReaction = usersWhoReacted.includes(currentUser.username);
+            return `<div class="msg-reaction-pill ${mineReaction ? 'mine' : ''}" onclick="toggleReaction('${m._id}', '${emoji}')">
+                ${emoji} <span>${usersWhoReacted.length}</span>
+              </div>`;
+          }).join('') + `</div>`
+          : '';
+
         return `
-          <div class="flex ${mine ? 'justify-end' : 'justify-start'} mb-2">
-            <div class="max-w-[85%] p-3 rounded-2xl text-xs ${mine ? 'bg-purple-600/80 text-white' : 'glass-card text-purple-100'} shadow-lg">
-              <p class="leading-relaxed">${escapeHtml(m.text)}</p>
-              <div class="flex items-center justify-end gap-2 mt-1">
-                <span class="text-[8px] opacity-60">${m.timestamp || ''}</span>
-                ${statusHtml}
+          <div class="flex ${mine ? 'justify-end' : 'justify-start'} mb-3">
+            <div class="max-w-[85%]">
+              <div class="p-3 rounded-2xl text-xs ${mine ? 'bg-purple-600/80 text-white' : 'glass-card text-purple-100'} shadow-lg" oncontextmenu="openReactionPicker(event, '${m._id}'); return false;" ondblclick="openReactionPicker(event, '${m._id}')">
+                <p class="leading-relaxed">${escapeHtml(m.text)}</p>
+                <div class="flex items-center justify-end gap-2 mt-1">
+                  <span class="text-[8px] opacity-60">${m.timestamp || ''}</span>
+                  ${statusHtml}
+                </div>
               </div>
+              ${reactionsHtml}
+              ${reactionPickerMsgId === m._id ? renderReactionPicker(m._id) : ''}
             </div>
           </div>`;
       }).join('');
@@ -1787,15 +2061,15 @@ function renderChatFeed() {
 
   backBtn?.classList.add('hidden');
   title.innerHTML = `IU Smart AI Assistant <i class="fa-solid fa-sparkles text-amber-300"></i>`;
-  subtitle.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Active Escrow Support Engine`;
+  subtitle.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Your Campus Guide`;
   icon.innerHTML = `😊`;
 
   feed.innerHTML = aiChatHistory.map(msg => {
     let html = `<p class="whitespace-pre-line leading-relaxed">${escapeHtml(msg.text)}</p>`;
     if (msg.options && msg.options.length > 0) {
-      html += `<div class="mt-3 space-y-2">` + msg.options.map(opt => `
-        <button onclick="handleOptionClick('${opt.key}')" class="w-full text-left bg-purple-600/40 hover:bg-purple-600/80 text-white p-2 rounded-xl text-[11px] font-bold border border-purple-400/30 flex items-center justify-between transition">
-          <span>${opt.label}</span><i class="fa-solid fa-chevron-right text-[10px]"></i>
+      html += `<div class="mt-3 space-y-1.5">` + msg.options.map(opt => `
+        <button onclick="handleOptionClick('${opt.key}')" class="w-full text-left bg-purple-600/40 hover:bg-purple-600/80 text-white p-2 rounded-xl text-[10px] font-bold border border-purple-400/30 flex items-center justify-between transition">
+          <span>${opt.label}</span><i class="fa-solid fa-chevron-right text-[9px]"></i>
         </button>`).join('') + `</div>`;
     }
     if (msg.showTicketForm) {
@@ -1817,11 +2091,18 @@ function renderChatFeed() {
 
 function handleOptionClick(key) {
   let responseText = '', isTicketForm = false;
-  if (key === 'payments') responseText = "🛡️ **How Escrow Works:**\n1. Purchase: Funds locked in Escrow.\n2. Delivery: Meet on campus.\n3. Buyer Approval: Click 'Confirm Received'.\n4. Payout drops to seller!";
-  else if (key === 'seller_payout') responseText = "💰 **How Sellers Get Paid:**\nFunds drop when buyer confirms receipt. 95% goes to you, 5% admin fee.";
-  else if (key === 'dispute_info') responseText = "⚠️ **Requesting a Refund:**\nClick 'Dispute' in your Profile tab to freeze funds and alert Admin.";
-  else if (key === 'upload_prod') responseText = "📦 **Uploading Products:**\nTap '+ Post' in Market tab and select an image!";
-  else if (key === 'ticket') { responseText = "🎫 **Open Support Ticket:**\nWrite details below to report directly to Master Admin:"; isTicketForm = true; }
+  if (key === 'payments') responseText = "🛡️ **Escrow:** Funds locked on purchase → released only when buyer confirms receipt. 5% platform fee on release.";
+  else if (key === 'seller_payout') responseText = "💰 **Seller Payouts:** When buyer confirms receipt, you get 95% of the price. 5% goes to platform.";
+  else if (key === 'dispute_info') responseText = "⚠️ **Dispute:** Profile → My Escrow Purchases → tap 'Dispute' → describe the issue → admin freezes funds.";
+  else if (key === 'upload_prod') responseText = "📦 **Post Product:** Tap '+ Post' on Market → fill details → upload 1-4 photos → Publish.";
+  else if (key === 'verification') responseText = "🏆 **Verification:** Silver badge is given by admin to trusted, active sellers. Keep selling, stay clean, and admin will notice!";
+  else if (key === 'boost') responseText = "⭐ **Boost:** ₦500 → 24h at top of the market. From Profile → My Active Listings → '⭐ Boost'.";
+  else if (key === 'withdraw') responseText = "💸 **Withdraw:** Profile → Wallet → 'Withdraw' → enter bank details → wait for admin approval.";
+  else if (key === 'deposit') responseText = "💳 **Deposit:** Profile → Wallet → 'Add Funds' → enter amount → pay via Paystack.";
+  else if (key === 'dm') responseText = "💬 **Chat:** Tap 'Chat' on any product or profile → messages appear in Chat → Direct Messages.";
+  else if (key === 'block_report') responseText = "🚩 **Report/Block:** Open any profile → Report or Block buttons at the bottom.";
+  else if (key === 'ticket') { responseText = "🎫 **Open Ticket:** Describe the issue below — it goes straight to admin."; isTicketForm = true; }
+
   const sel = HELP_TOPICS.find(t => t.key === key);
   aiChatHistory.push({ sender: 'user', text: sel ? sel.label : key });
   aiChatHistory.push({ sender: 'ai', text: responseText, showTicketForm: isTicketForm, options: isTicketForm ? null : HELP_TOPICS });
@@ -1852,6 +2133,32 @@ async function submitSupportTicket() {
     renderChatFeed();
     showToast("Ticket submitted!");
   } catch (err) { showToast("Failed", true); }
+}
+
+/* ==========================================================
+   MESSAGE REACTIONS
+   ========================================================== */
+function openReactionPicker(event, msgId) {
+  event.preventDefault();
+  reactionPickerMsgId = (reactionPickerMsgId === msgId) ? null : msgId;
+  renderChatFeed();
+}
+
+function renderReactionPicker(msgId) {
+  const emojis = ['👍', '❤️', '😂', '🔥', '😮', '😢'];
+  return `
+    <div class="reaction-picker">
+      ${emojis.map(e => `<span class="reaction-option" onclick="toggleReaction('${msgId}', '${e}')">${e}</span>`).join('')}
+    </div>
+  `;
+}
+
+async function toggleReaction(msgId, emoji) {
+  if (!currentUser) return;
+  reactionPickerMsgId = null;
+  try {
+    await window.fsToggleDMReaction(msgId, emoji, currentUser.username);
+  } catch (err) { /* silent */ }
 }
 
 /* ==========================================================
@@ -1891,6 +2198,22 @@ async function replyToTicket(ticketId) {
 function renderAdminPanel() {
   if (!currentUser || !currentUser.isAdmin) return;
 
+  // Announcements manager
+  const annList = document.getElementById('adminAnnouncementsList');
+  if (annList) {
+    annList.innerHTML = announcements.length === 0
+      ? `<p class="text-[11px] text-purple-300/60 italic">No active announcements.</p>`
+      : announcements.slice(0, 5).map(a => `
+        <div class="p-2.5 bg-amber-950/20 rounded-xl border border-amber-400/30 flex items-start justify-between gap-2">
+          <div class="flex-1 min-w-0">
+            <p class="text-[11px] text-purple-100">${escapeHtml(a.text)}</p>
+            <span class="text-[9px] text-purple-400">${timeAgo(a.timestamp)}</span>
+          </div>
+          <button onclick="deleteAnnouncement('${a.id}')" class="bg-red-600/80 hover:bg-red-500 text-white px-2 py-1 rounded-lg text-[9px] font-bold">✕</button>
+        </div>
+      `).join('');
+  }
+
   // Disputes
   const disputesList = document.getElementById('adminDisputesList');
   const disputed = orders.filter(o => o.status === 'DISPUTED');
@@ -1909,7 +2232,52 @@ function renderAdminPanel() {
       </div>
     `).join('');
 
-  // Tickets with reply thread
+  // Withdrawals
+  const wdList = document.getElementById('adminWithdrawalsList');
+  const pendingWd = withdrawals.filter(w => w.status === 'Pending');
+  document.getElementById('withdrawalsBadge').textContent = `${pendingWd.length} Pending`;
+  wdList.innerHTML = pendingWd.length === 0
+    ? `<p class="text-[11px] text-purple-300/60 italic">No pending withdrawals.</p>`
+    : pendingWd.map(w => `
+      <div class="withdrawal-card pending space-y-2">
+        <div class="flex justify-between">
+          <span class="text-xs font-bold text-white">@${w.username}</span>
+          <span class="text-amber-300 font-bold text-xs">₦${w.amount.toLocaleString()}</span>
+        </div>
+        <div class="text-[10px] text-purple-200 space-y-0.5">
+          <p>🏦 <strong>${escapeHtml(w.bankName)}</strong></p>
+          <p>🔢 ${escapeHtml(w.accountNumber)}</p>
+          <p>👤 ${escapeHtml(w.accountName)}</p>
+          <p class="text-purple-400">🕐 ${w.date}</p>
+        </div>
+        <div class="flex gap-2 pt-1">
+          <button onclick="approveWithdrawal('${w.id}')" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-1.5 rounded-lg text-[10px]">✅ Mark Paid</button>
+          <button onclick="rejectWithdrawal('${w.id}')" class="flex-1 bg-red-600 hover:bg-red-500 text-white font-bold py-1.5 rounded-lg text-[10px]">❌ Reject</button>
+        </div>
+      </div>
+    `).join('');
+
+  // Reports
+  const reportsList = document.getElementById('adminReportsList');
+  const pendingReports = reports.filter(r => r.status === 'pending');
+  document.getElementById('reportsBadge').textContent = `${pendingReports.length} Open`;
+  reportsList.innerHTML = pendingReports.length === 0
+    ? `<p class="text-[11px] text-purple-300/60 italic">No open reports.</p>`
+    : pendingReports.map(r => `
+      <div class="p-3 bg-red-950/20 rounded-xl border border-red-500/40 space-y-1">
+        <div class="flex justify-between text-[10px]">
+          <span class="text-white font-bold">Report by @${r.reporter}</span>
+          <span class="text-purple-300">${timeAgo(r.timestamp)}</span>
+        </div>
+        <p class="text-purple-100 text-[11px]">Against: <strong>@${r.reportedUser}</strong></p>
+        <p class="text-red-200 text-[11px] italic">"${escapeHtml(r.reason)}"</p>
+        <div class="flex gap-2 pt-1">
+          <button onclick="markReportResolved('${r.id}')" class="flex-1 bg-gray-600 text-white font-bold py-1 rounded-lg text-[10px]">Mark Reviewed</button>
+        </div>
+      </div>
+    `).join('');
+
+  // Tickets
   const ticketsList = document.getElementById('adminTicketsList');
   document.getElementById('ticketCountBadge').textContent = `${supportTickets.length} Tickets`;
   ticketsList.innerHTML = supportTickets.length === 0
@@ -1934,7 +2302,7 @@ function renderAdminPanel() {
             `).join('')}
           </div>
           <div class="flex gap-2">
-            <input type="text" id="ticketReply-${t.id}" placeholder="Reply to this ticket..." class="flex-1 glass-input rounded-xl px-3 py-2 text-xs text-white">
+            <input type="text" id="ticketReply-${t.id}" placeholder="Reply..." class="flex-1 glass-input rounded-xl px-3 py-2 text-xs text-white">
             <button onclick="replyToTicket('${t.id}')" class="glass-button bg-purple-600 hover:bg-purple-500 text-white px-3 rounded-xl text-xs font-bold">
               <i class="fa-solid fa-paper-plane"></i>
             </button>
@@ -1956,7 +2324,7 @@ function renderAdminPanel() {
           </div>
           <span class="text-[9px] text-purple-300">${escapeHtml(u.name)} • Bal: ₦${(u.balance || 0).toLocaleString()}</span>
         </div>
-        <div class="flex gap-1">
+        <div class="flex gap-1 flex-wrap justify-end">
           ${u.username === 'chris.bone' ? '' : `
             <button onclick="toggleUserBan('${u.username}')" class="${u.isBanned ? 'bg-emerald-600' : 'bg-red-600'} text-white px-2 py-1 rounded-lg text-[9px] font-bold">${u.isBanned ? 'Unban' : 'Ban'}</button>
             ${u.isVerified
@@ -1968,51 +2336,6 @@ function renderAdminPanel() {
       </div>
     </div>
   `).join('');
-
-  // Withdrawals
-  const wdList = document.getElementById('adminWithdrawalsList');
-  const pendingWd = withdrawals.filter(w => w.status === 'Pending');
-  document.getElementById('withdrawalsBadge').textContent = `${pendingWd.length} Pending`;
-  wdList.innerHTML = pendingWd.length === 0
-    ? `<p class="text-[11px] text-purple-300/60 italic">No pending withdrawals.</p>`
-    : pendingWd.map(w => `
-      <div class="withdrawal-card pending space-y-2">
-        <div class="flex justify-between">
-          <span class="text-xs font-bold text-white">@${w.username}</span>
-          <span class="text-amber-300 font-bold text-xs">₦${w.amount.toLocaleString()}</span>
-        </div>
-        <div class="text-[10px] text-purple-200 space-y-0.5">
-          <p>🏦 <strong>${escapeHtml(w.bankName)}</strong></p>
-          <p>🔢 ${escapeHtml(w.accountNumber)}</p>
-          <p>👤 ${escapeHtml(w.accountName)}</p>
-          <p class="text-purple-400">🕐 ${w.date}</p>
-        </div>
-        <div class="flex gap-2 pt-1">
-          <button onclick="approveWithdrawal('${w.id}')" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-1.5 rounded-lg text-[10px]">✅ Mark Paid</button>
-          <button onclick="rejectWithdrawal('${w.id}')" class="flex-1 bg-red-600 hover:bg-red-500 text-white font-bold py-1.5 rounded-lg text-[10px]">❌ Reject & Refund</button>
-        </div>
-      </div>
-    `).join('');
-
-  // Reports
-  const reportsList = document.getElementById('adminReportsList');
-  const pendingReports = reports.filter(r => r.status === 'pending');
-  document.getElementById('reportsBadge').textContent = `${pendingReports.length} Open`;
-  reportsList.innerHTML = pendingReports.length === 0
-    ? `<p class="text-[11px] text-purple-300/60 italic">No open reports.</p>`
-    : pendingReports.map(r => `
-      <div class="p-3 bg-red-950/20 rounded-xl border border-red-500/40 space-y-1">
-        <div class="flex justify-between text-[10px]">
-          <span class="text-white font-bold">Report by @${r.reporter}</span>
-          <span class="text-purple-300">${timeAgo(r.timestamp)}</span>
-        </div>
-        <p class="text-purple-100 text-[11px]">Against: <strong>@${r.reportedUser}</strong></p>
-        <p class="text-red-200 text-[11px] italic">"${escapeHtml(r.reason)}"</p>
-        <div class="flex gap-2 pt-1">
-          <button onclick="markReportResolved('${r.id}')" class="flex-1 bg-gray-600 text-white font-bold py-1 rounded-lg text-[10px]">Mark Reviewed</button>
-        </div>
-      </div>
-    `).join('');
 }
 
 async function markReportResolved(id) {
@@ -2073,6 +2396,7 @@ window.onFirebaseDataReady = function (data) {
   reviews = data.reviews || [];
   withdrawals = data.withdrawals || [];
   reports = data.reports || [];
+  announcements = data.announcements || [];
   dbReady = true;
 
   const stored = JSON.parse(localStorage.getItem('iu_currentUser') || 'null');
@@ -2085,6 +2409,7 @@ window.onFirebaseDataReady = function (data) {
   if (loadingEl) loadingEl.style.display = 'none';
 
   renderProducts();
+  renderAnnouncements();
   renderNotificationBell();
   renderNavBadges();
 };
@@ -2119,6 +2444,50 @@ window.onFirestoreSync = function (collection) {
   if (collection === 'reviews') renderMyReviews();
   if (collection === 'withdrawals' && currentUser && currentUser.isAdmin) renderAdminPanel();
   if (collection === 'reports' && currentUser && currentUser.isAdmin) renderAdminPanel();
+  if (collection === 'announcements') renderAnnouncements();
+};
+
+/* ==========================================================
+   PWA — Install prompt
+   ========================================================== */
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredPrompt = e;
+  document.getElementById('pwaInstallBtn')?.classList.add('show');
+});
+
+async function installPWA() {
+  if (!deferredPrompt) return;
+  deferredPrompt.prompt();
+  const { outcome } = await deferredPrompt.userChoice;
+  if (outcome === 'accepted') {
+    showToast("App installed! 🎉");
+  }
+  deferredPrompt = null;
+  document.getElementById('pwaInstallBtn')?.classList.remove('show');
+}
+
+/* ==========================================================
+   PUSH NOTIFICATION SOUND
+   ========================================================== */
+let lastNotifCount = 0;
+window.onNewNotificationForPush = function (notif) {
+  // Only play if recipient is current user
+  if (!currentUser || notif.forUser !== currentUser.username) return;
+  // Simple beep via Web Audio API
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = 880;
+    osc.type = 'sine';
+    gain.gain.setValueAtTime(0.1, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.3);
+  } catch (e) { /* silent */ }
 };
 
 /* ==========================================================
@@ -2133,5 +2502,13 @@ document.addEventListener('click', (e) => {
   if (target) {
     const v = parseInt(target.dataset.value, 10);
     if (!isNaN(v)) setRatingValue(v);
+  }
+  // Close reaction picker if clicking outside
+  if (!e.target.closest('.reaction-picker') && !e.target.closest('.msg-reactions-bar')) {
+    if (reactionPickerMsgId) {
+      reactionPickerMsgId = null;
+      // don't re-render unless we're in DM mode
+      if (activeChatTarget) renderChatFeed();
+    }
   }
 });

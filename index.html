@@ -2,17 +2,31 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#1d0938">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="IU Portal">
   <title>Igbinedion University Campus Portal & Marketplace</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <script src="https://js.paystack.co/v2/inline.js"></script>
   <link rel="stylesheet" href="style.css">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon-192.png">
 </head>
 <body class="font-sans min-h-screen text-slate-100 relative overflow-x-hidden selection:bg-purple-500 selection:text-white theme-party" id="appBody">
 
+  <!-- SPLASH SCREEN -->
+  <div id="splashScreen" class="splash-screen">
+    <div class="splash-logo">IU</div>
+    <div class="splash-text">IGBINEDION UNIVERSITY</div>
+    <div class="splash-subtext">ESCROW & RENTAL PORTAL</div>
+    <div class="splash-loader"></div>
+  </div>
+
   <!-- LOADING SCREEN -->
-  <div id="loadingScreen" class="loading-screen">
+  <div id="loadingScreen" class="loading-screen" style="display:none;">
     <div class="loading-spinner"></div>
     <p class="text-xs text-purple-300 font-bold">Connecting to IU Campus Cloud...</p>
   </div>
@@ -43,18 +57,13 @@
     </div>
 
     <div class="flex items-center gap-2">
-      <!-- NOTIFICATION BELL → goes to Notifications page -->
+      <!-- NOTIFICATION BELL -->
       <div class="notif-bell-btn">
         <button onclick="goToNotifications()" class="w-9 h-9 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center border border-white/20 transition shadow-md">
           <i class="fa-solid fa-bell text-xs"></i>
           <span id="notifBadge" class="notif-badge hidden">0</span>
         </button>
       </div>
-
-      <!-- QUICK THEME TOGGLE -->
-      <button onclick="toggleThemeQuick()" class="w-9 h-9 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center border border-white/20 transition shadow-md" title="Quick Theme Toggle">
-        <i id="themeToggleIcon" class="fa-solid fa-sun text-xs theme-toggle-icon"></i>
-      </button>
 
       <!-- SETTINGS -->
       <button onclick="openModal('settingsModal')" class="w-9 h-9 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center border border-white/20 transition shadow-md" title="Settings & Themes">
@@ -73,6 +82,10 @@
 
     <!-- MARKETPLACE -->
     <section id="feedSection" class="space-y-4">
+
+      <!-- ANNOUNCEMENTS CONTAINER -->
+      <div id="announcementContainer"></div>
+
       <div class="glass-card p-4 relative overflow-hidden border border-amber-400/30">
         <div class="flex items-center justify-between mb-2">
           <div class="flex items-center gap-2">
@@ -209,7 +222,6 @@
           </button>
         </div>
 
-        <!-- FILTER TABS -->
         <div class="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
           <button id="notifFilter-all" onclick="setNotifFilter('all')" class="notif-filter-tab active shrink-0">All</button>
           <button id="notifFilter-orders" onclick="setNotifFilter('orders')" class="notif-filter-tab shrink-0">🛒 Orders</button>
@@ -229,15 +241,12 @@
 
     <!-- CHAT -->
     <section id="chatSection" class="hidden space-y-3">
-      <!-- TOP-LEVEL TABS -->
       <div class="flex glass-card p-1">
         <button id="chatTabAiBtn" onclick="switchChatMode('ai')" class="flex-1 py-2 text-xs font-bold rounded-lg chat-tab-active transition"><i class="fa-solid fa-comments mr-1"></i> Chats</button>
         <button id="chatTabLiveBtn" onclick="switchChatMode('live')" class="flex-1 py-2 text-xs font-bold rounded-lg chat-tab-inactive transition"><i class="fa-solid fa-globe mr-1"></i> Live Campus</button>
       </div>
 
-      <!-- AI / DM PANEL -->
       <div id="aiChatPanel" class="glass-card p-4 flex flex-col h-[560px] relative overflow-hidden">
-        <!-- Sub-tabs: AI vs Inbox -->
         <div class="flex glass-card p-1 mb-2">
           <button id="aiSubTabAi" onclick="switchAiSubMode('ai')" class="flex-1 py-1.5 text-[10px] font-bold rounded-lg bg-purple-600/70 text-white transition">
             🤖 AI Assistant
@@ -247,7 +256,6 @@
           </button>
         </div>
 
-        <!-- AI SUB-VIEW -->
         <div id="aiSubView" class="flex-1 flex flex-col overflow-hidden">
           <div class="border-b border-white/10 pb-3 mb-2 flex items-center justify-between">
             <div class="flex items-center gap-3">
@@ -257,7 +265,7 @@
               <div id="chatHeaderIcon" class="w-10 h-10 rounded-full bg-gradient-to-tr from-amber-400 to-purple-600 flex items-center justify-center text-base border border-white/30 shadow-md">😊</div>
               <div>
                 <h3 id="chatHeaderTitle" class="text-xs font-extrabold text-white flex items-center gap-1.5">IU Smart AI Assistant <i class="fa-solid fa-sparkles text-amber-300"></i></h3>
-                <p id="chatHeaderSubtitle" class="text-[9px] text-purple-300 font-semibold flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Active Escrow Support Engine</p>
+                <p id="chatHeaderSubtitle" class="text-[9px] text-purple-300 font-semibold flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Your Campus Guide</p>
               </div>
             </div>
             <button onclick="resetChatToAI()" class="text-[10px] text-purple-300/70 hover:text-white bg-white/5 px-2 py-1 rounded-lg border border-white/10"><i class="fa-solid fa-rotate-right mr-1"></i>AI</button>
@@ -269,7 +277,6 @@
           </form>
         </div>
 
-        <!-- DM INBOX SUB-VIEW -->
         <div id="inboxSubView" class="flex-1 flex flex-col overflow-hidden hidden">
           <div class="border-b border-white/10 pb-3 mb-2">
             <h3 class="text-xs font-extrabold text-white flex items-center gap-1.5"><i class="fa-solid fa-inbox text-amber-300"></i> Direct Messages</h3>
@@ -284,7 +291,6 @@
         </div>
       </div>
 
-      <!-- LIVE CHAT PANEL -->
       <div id="liveChatPanel" class="glass-card p-4 flex flex-col h-[560px] relative overflow-hidden hidden">
         <div class="border-b border-white/10 pb-3 mb-2 flex items-center justify-between">
           <div class="flex items-center gap-3">
@@ -315,6 +321,18 @@
           <span class="text-[9px] bg-amber-500/20 text-amber-300 border border-amber-400/40 font-black px-2.5 py-0.5 rounded-full block">MASTER BOSS</span>
           <span class="text-[10px] text-emerald-400 font-bold block mt-1" id="adminCommissionBalance">5% Rev: ₦0</span>
         </div>
+      </div>
+
+      <!-- ANNOUNCEMENTS MANAGER -->
+      <div class="glass-card p-4 space-y-3 border border-amber-400/40">
+        <div class="flex items-center justify-between">
+          <h3 class="text-xs font-bold text-amber-300 flex items-center gap-1.5"><i class="fa-solid fa-bullhorn"></i> Announcements</h3>
+          <button onclick="postAnnouncement()" class="text-[10px] bg-amber-500 hover:bg-amber-400 text-purple-950 px-2.5 py-1 rounded-lg font-black">
+            <i class="fa-solid fa-plus mr-1"></i> New
+          </button>
+        </div>
+        <p class="text-[10px] text-purple-300/70">Post a message that will show at the top of everyone's Market page. Users can dismiss per-announcement.</p>
+        <div id="adminAnnouncementsList" class="space-y-2 text-xs"></div>
       </div>
 
       <div class="glass-card p-4 space-y-3 border border-red-500/40">
@@ -360,8 +378,12 @@
 
   </main>
 
+  <!-- PWA INSTALL BUTTON -->
+  <button id="pwaInstallBtn" class="pwa-install-btn" onclick="installPWA()">
+    <i class="fa-solid fa-download"></i> Install App
+  </button>
+
   <!-- MODALS -->
-  <!-- SETTINGS -->
   <div id="settingsModal" class="fixed inset-0 modal-backdrop z-50 hidden flex items-center justify-center p-4">
     <div class="glass-modal w-full max-w-sm p-6 space-y-4 relative">
       <button onclick="closeModal('settingsModal')" class="absolute top-4 right-4 text-purple-300 hover:text-white text-xs">✕</button>
@@ -385,7 +407,6 @@
     </div>
   </div>
 
-  <!-- CONNECTIONS -->
   <div id="connectionsModal" class="fixed inset-0 modal-backdrop z-50 hidden flex items-center justify-center p-4">
     <div class="glass-modal w-full max-w-sm p-6 space-y-3 relative max-h-[80vh] flex flex-col">
       <button onclick="closeModal('connectionsModal')" class="absolute top-4 right-4 text-purple-300 hover:text-white text-xs">✕</button>
@@ -394,7 +415,6 @@
     </div>
   </div>
 
-  <!-- USER PROFILE -->
   <div id="userProfileModal" class="fixed inset-0 modal-backdrop z-50 hidden flex items-center justify-center p-4">
     <div class="glass-modal w-full max-w-sm p-6 space-y-4 relative text-center">
       <button onclick="closeModal('userProfileModal')" class="absolute top-4 right-4 text-purple-300 hover:text-white text-xs">✕</button>
@@ -421,20 +441,20 @@
     </div>
   </div>
 
-  <!-- PRODUCT DETAIL -->
   <div id="productDetailModal" class="fixed inset-0 modal-backdrop z-50 hidden flex items-center justify-center p-4">
     <div class="glass-modal w-full max-w-sm p-6 space-y-4 relative overflow-y-auto max-h-[90vh]">
       <button onclick="closeModal('productDetailModal')" class="absolute top-4 right-4 text-purple-300 hover:text-white text-xs z-10 bg-black/40 w-7 h-7 rounded-full flex items-center justify-center">✕</button>
-      <div class="h-48 rounded-2xl overflow-hidden border border-white/20 bg-purple-950/50 relative">
+      <div class="h-48 rounded-2xl overflow-hidden border border-white/20 bg-purple-950/50 relative cursor-pointer" onclick="openLightbox(detailImages, detailImgIndex)">
         <img id="detailProdImg" class="w-full h-full object-cover" alt="Product Image">
         <span id="detailProdTag" class="absolute top-3 left-3 bg-purple-950/80 text-purple-200 border border-white/20 text-[9px] font-bold px-2.5 py-0.5 rounded-full backdrop-blur-md">Tag</span>
         <div id="detailCarouselContainer"></div>
       </div>
       <div class="space-y-2">
-        <div class="flex items-center justify-between">
-          <h3 id="detailProdTitle" class="font-extrabold text-base text-white"></h3>
-          <span id="detailProdPrice" class="text-sm font-black text-amber-300"></span>
+        <div class="flex items-center justify-between gap-2">
+          <h3 id="detailProdTitle" class="font-extrabold text-base text-white flex-1"></h3>
+          <span id="detailProdPrice" class="text-sm font-black text-amber-300 whitespace-nowrap"></span>
         </div>
+        <p id="detailProdViews" class="text-[10px] text-purple-300/70">👁 0 views</p>
         <div class="flex items-center gap-2 bg-white/5 p-2.5 rounded-xl border border-white/10 cursor-pointer" onclick="closeModal('productDetailModal'); viewUserProfile(currentDetailSeller)">
           <div id="detailSellerAvatar" class="w-7 h-7 rounded-full bg-purple-600 text-white flex items-center justify-center font-bold text-[10px] overflow-hidden"></div>
           <div>
@@ -454,7 +474,6 @@
     </div>
   </div>
 
-  <!-- ADD PRODUCT -->
   <div id="addProductModal" class="fixed inset-0 modal-backdrop z-50 hidden flex items-center justify-center p-4">
     <div class="glass-modal w-full max-w-sm p-6 space-y-3 relative max-h-[92vh] overflow-y-auto">
       <button onclick="closeModal('addProductModal')" class="absolute top-4 right-4 text-purple-300 hover:text-white text-xs">✕</button>
@@ -486,7 +505,6 @@
     </div>
   </div>
 
-  <!-- SIGNUP -->
   <div id="signupModal" class="fixed inset-0 modal-backdrop z-50 hidden flex items-center justify-center p-4">
     <div class="glass-modal w-full max-w-sm p-6 space-y-3 relative">
       <button onclick="closeModal('signupModal')" class="absolute top-4 right-4 text-purple-300 hover:text-white text-xs">✕</button>
@@ -504,7 +522,6 @@
     </div>
   </div>
 
-  <!-- LOGIN -->
   <div id="loginModal" class="fixed inset-0 modal-backdrop z-50 hidden flex items-center justify-center p-4">
     <div class="glass-modal w-full max-w-sm p-6 space-y-4 relative">
       <button onclick="closeModal('loginModal')" class="absolute top-4 right-4 text-purple-300 hover:text-white text-xs">✕</button>
@@ -517,7 +534,6 @@
     </div>
   </div>
 
-  <!-- BANNED -->
   <div id="bannedModal" class="fixed inset-0 modal-backdrop z-50 hidden flex items-center justify-center p-4">
     <div class="glass-modal w-full max-w-sm p-6 space-y-4 text-center border border-red-500/50">
       <div class="text-4xl animate-bounce">🚫</div>
@@ -527,7 +543,6 @@
     </div>
   </div>
 
-  <!-- LOGIN REQUIRED -->
   <div id="customAlertModal" class="fixed inset-0 modal-backdrop z-50 hidden flex items-center justify-center p-4">
     <div class="glass-modal w-full max-w-sm p-6 space-y-4 text-center">
       <div class="text-4xl animate-bounce">🔒</div>
@@ -540,7 +555,6 @@
     </div>
   </div>
 
-  <!-- RATING MODAL -->
   <div id="ratingModal" class="fixed inset-0 modal-backdrop z-50 hidden flex items-center justify-center p-4">
     <div class="glass-modal w-full max-w-sm p-6 space-y-4 text-center">
       <div class="text-4xl animate-celebrate">⭐</div>
@@ -584,7 +598,21 @@
     </button>
   </nav>
 
-  <!-- SCRIPTS -->
+  <script>
+    // Hide splash after 1.6s, then show loading if still connecting
+    window.addEventListener('load', () => {
+      setTimeout(() => {
+        const splash = document.getElementById('splashScreen');
+        if (splash) {
+          splash.classList.add('hide');
+          setTimeout(() => splash.remove(), 700);
+        }
+        const loading = document.getElementById('loadingScreen');
+        if (loading) loading.style.display = 'flex';
+      }, 1400);
+    });
+  </script>
+
   <script src="app.js"></script>
   <script type="module" src="firebase.js"></script>
 </body>

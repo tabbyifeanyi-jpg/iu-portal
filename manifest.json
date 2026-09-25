@@ -1,0 +1,28 @@
+{
+  "name": "Igbinedion University Campus Portal",
+  "short_name": "IU Portal",
+  "description": "Campus marketplace with escrow payments, rentals, chat, and more.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1d0938",
+  "theme_color": "#1d0938",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["shopping", "education", "social"],
+  "lang": "en-NG",
+  "dir": "ltr"
+}
